@@ -9,84 +9,114 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bezbayana777/trip_go/internal/db"
-	"github.com/bezbayana777/trip_go/internal/repository"
-	generated "github.com/bezbayana777/trip_go/internal/generated"
+	"log/slog"
+  "github.com/bezbayana777/trip_go/internal/infra/telemetry"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
-	httpDelivery "github.com/bezbayana777/trip_go/internal/delivery/http"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	tripHttp "github.com/bezbayana777/trip_go/internal/http"
+	createHandler "github.com/bezbayana777/trip_go/internal/http/trip/create"
+	finishHandler "github.com/bezbayana777/trip_go/internal/http/trip/finish"
+	getHandler "github.com/bezbayana777/trip_go/internal/http/trip/get"
+	"github.com/bezbayana777/trip_go/internal/infra/postgres"
+	repoTrip "github.com/bezbayana777/trip_go/internal/repository/trip"
+	usecaseCreate "github.com/bezbayana777/trip_go/internal/usecase/trip/create"
+	usecaseFinish "github.com/bezbayana777/trip_go/internal/usecase/trip/finish"
+	usecaseGet "github.com/bezbayana777/trip_go/internal/usecase/trip/get"
 )
 
-
 func main() {
-
 	ctx := context.Background()
 
-	httpAddr := getFromEnv("HTTP_ADDR", ":8080")
-	shutdownTimeoutString := getFromEnv("SHUTDOWN_TIMEOUT", "10s")	
-	shutdownTimeout, err := time.ParseDuration(shutdownTimeoutString)
-	if err != nil {
-		log.Fatalf("Invalid SHUTDOWN_TIMEOUT value: %v", err)
+	logger := telemetry.NewJSONLogger()
+	slog.SetDefault(logger)
+
+	collectorURL := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	if collectorURL == "" {
+		collectorURL = "localhost:4317" 
 	}
 
-	dbPool, err := db.NewPool(ctx)
+	cleanup, err := telemetry.Init(ctx, collectorURL)
+	if err != nil {
+		logger.Error("failed to init telemetry", slog.String("error", err.Error()))
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = cleanup(shutdownCtx)
+	}()
+
+	logger.Info("service started", slog.String("service", "trip-service"))
+	defer logger.Info("service stopped", slog.String("service", "trip-service"))
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		databaseURL = "postgres://postgres:postgres@localhost:5432/trip_db?sslmode=disable"
+	}
+
+	poolConfig, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		log.Fatalf("Failed to parse database config: %v", err)
+	}
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	defer dbPool.Close()
+	defer pool.Close()
+
+	if err := pool.Ping(ctx); err != nil {
+		log.Fatalf("Database unreachable: %v", err)
+	}
 	log.Println("Successfully connected to PostgreSQL")
 
-	tripRepo := repository.NewTripRepository(dbPool)
-	txManager := repository.NewTxManager(dbPool)
+	txManager := postgres.NewTxManager(pool)
+	tripRepo := repoTrip.New(pool)
 
-	apiServer := httpDelivery.NewServer(tripRepo, txManager, dbPool)
+	createUC := usecaseCreate.New(tripRepo, txManager)
+	getUC := usecaseGet.New(tripRepo)
+	finishUC := usecaseFinish.New(tripRepo, txManager)
 
+	routerDeps := tripHttp.RouterDeps{
+		CreateHandler: createHandler.New(createUC),
+		GetHandler:    getHandler.New(getUC),
+		FinishHandler: finishHandler.New(finishUC),
+	}
 
-	router := chi.NewRouter()
-	router.Use(middleware.Recoverer)
+	handler := tripHttp.NewRouter(routerDeps)
 
-	generated.HandlerFromMux(apiServer, router)
-	
-	server := &http.Server{
-		Addr:    httpAddr,
-		Handler: router,
-		ReadTimeout:  5 * time.Second,
-		ReadHeaderTimeout: 5 * time.Second,
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	srv := &http.Server{
+		Addr:         ":" + port,
+		Handler:      handler,
+		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	shutdownChan := make(chan os.Signal, 1)
+	signal.Notify(shutdownChan, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		log.Printf("Starting server on %s", httpAddr)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Could not listen on %s: %v\n", httpAddr, err)
+		log.Printf("Starting HTTP server on port %s...", port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v", err)
 		}
 	}()
-	
-	sig := <-stop
-	log.Printf("Shutdown signal received: %v", sig)
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	sig := <-shutdownChan
+	log.Printf("Received shutdown signal (%v), gracefully shutting down...", sig)
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server forced to shutdown: %v", err)
 	}
 
-	log.Println("HTTP server stopped gracefully")
-}
-
-
-func getFromEnv(key, defaultValue string) string {
-	value, exists := os.LookupEnv(key)
-	
-	if exists {
-		return value
-	}
-	
-	return defaultValue
+	log.Println("Server stopped successfully.")
 }

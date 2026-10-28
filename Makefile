@@ -18,3 +18,14 @@ run:
 	go run cmd/trip-service/main.go
 
 
+.PHONY: lint
+lint:
+	golangci-lint run
+
+.PHONY: test test-integration
+
+test:
+	CGO_ENABLED=1 go test -race -cover ./...
+
+test-integration:
+	CGO_ENABLED=1 go test -v -tags=integration ./...
