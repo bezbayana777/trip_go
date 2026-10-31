@@ -1,11 +1,10 @@
-
-
 package repository
 
 import (
 	"context"
 	"fmt"
 
+	"github.com/bezbayana777/trip_go/internal/db"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -31,32 +30,38 @@ func (m *pgTxManager) Do(ctx context.Context, fn func(ctx context.Context) error
 		return fn(ctx)
 	}
 
-	txOptions := pgx.TxOptions{
-		IsoLevel: pgx.ReadCommitted,
-	}
-
-	tx, err := m.pool.BeginTx(ctx, txOptions)
+	beginCtx, cancelBegin := db.WithQueryTimeout(ctx)
+	tx, err := m.pool.BeginTx(beginCtx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	cancelBegin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	rollback := func() error {
+		rbCtx, cancel := db.WithQueryTimeout(context.WithoutCancel(ctx))
+		defer cancel()
+		return tx.Rollback(rbCtx)
 	}
 
 	ctxWithTx := context.WithValue(ctx, txKey, tx)
 
 	defer func() {
 		if p := recover(); p != nil {
-			_ = tx.Rollback(ctx)
-			panic(p) 
+			_ = rollback()
+			panic(p)
 		}
 	}()
 
 	if err := fn(ctxWithTx); err != nil {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
-			return fmt.Errorf("tx execution error: %v, rollback error: %v", err, rollbackErr)
+		if rbErr := rollback(); rbErr != nil {
+			return fmt.Errorf("tx execution error: %w, rollback error: %v", err, rbErr)
 		}
 		return err
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	commitCtx, cancelCommit := db.WithQueryTimeout(ctx)
+	defer cancelCommit()
+	if err := tx.Commit(commitCtx); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 

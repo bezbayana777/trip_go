@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -10,12 +11,12 @@ import (
 	"time"
 
 	"github.com/bezbayana777/trip_go/internal/db"
-	"github.com/bezbayana777/trip_go/internal/repository"
 	generated "github.com/bezbayana777/trip_go/internal/generated"
+	"github.com/bezbayana777/trip_go/internal/repository"
 
+	httpDelivery "github.com/bezbayana777/trip_go/internal/delivery/http"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	httpDelivery "github.com/bezbayana777/trip_go/internal/delivery/http"
 )
 
 
@@ -46,7 +47,26 @@ func main() {
 	router := chi.NewRouter()
 	router.Use(middleware.Recoverer)
 
-	generated.HandlerFromMux(apiServer, router)
+	generated.HandlerWithOptions(apiServer, generated.ChiServerOptions{
+	BaseRouter: router,
+	ErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusBadRequest)
+
+		instance := r.URL.Path
+		detail := err.Error()
+
+		problem := generated.Problem{
+			Type:     "about:blank",
+			Code:     "invalid_request",
+			Status:   int32(http.StatusBadRequest),
+			Title:    "Bad Request",
+			Detail:   &detail,
+			Instance: &instance,
+		}
+		_ = json.NewEncoder(w).Encode(problem)
+	},
+})
 	
 	server := &http.Server{
 		Addr:    httpAddr,

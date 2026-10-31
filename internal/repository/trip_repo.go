@@ -7,10 +7,17 @@ import (
 	"time"
 
 	"github.com/Masterminds/squirrel"
+	"github.com/bezbayana777/trip_go/internal/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+var (
+	ErrTripNotFound  = errors.New("trip not found")
+	ErrTripCompleted = errors.New("trip already completed")
+	ErrDriverBusy    = errors.New("driver already has an active trip")
 )
 
 type DBops interface {
@@ -40,9 +47,18 @@ type CreateTripParams struct {
 	StartedAt      time.Time
 }
 
+func isDriverBusy(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "trips_driver_active_idx"
+}
+
 func (r *TripRepository) CreateTrip(ctx context.Context, arg CreateTripParams) error {
-	db := getDB(ctx, r.pool) 
+	ctx, cancel := db.WithQueryTimeout(ctx)
+	defer cancel()
+
+	conn := getDB(ctx, r.pool)
 	builder := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
+	now := time.Now()
 
 	queryTrip, argsTrip, err := builder.
 		Insert("trips").
@@ -58,19 +74,16 @@ func (r *TripRepository) CreateTrip(ctx context.Context, arg CreateTripParams) e
 			arg.StartLatitude, arg.StartLongitude,
 			arg.EndLatitude, arg.EndLongitude,
 			arg.Price, arg.Status, arg.StartedAt,
-			time.Now(), time.Now(),
+			now, now,
 		).
 		ToSql()
-
 	if err != nil {
 		return fmt.Errorf("failed to build trip insert query: %w", err)
 	}
 
-	_, err = db.Exec(ctx, queryTrip, argsTrip...)
-	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return fmt.Errorf("driver is busy: %w", err)
+	if _, err = conn.Exec(ctx, queryTrip, argsTrip...); err != nil {
+		if isDriverBusy(err) {
+			return fmt.Errorf("%w: %v", ErrDriverBusy, err)
 		}
 		return fmt.Errorf("failed to insert trip: %w", err)
 	}
@@ -78,21 +91,18 @@ func (r *TripRepository) CreateTrip(ctx context.Context, arg CreateTripParams) e
 	queryHistory, argsHistory, err := builder.
 		Insert("trip_status_history").
 		Columns("trip_id", "from_status", "to_status", "reason", "changed_at").
-		Values(arg.ID, nil, arg.Status, "Trip created", time.Now()).
+		Values(arg.ID, nil, arg.Status, "Trip created", now).
 		ToSql()
-
 	if err != nil {
 		return fmt.Errorf("failed to build history insert query: %w", err)
 	}
 
-	_, err = db.Exec(ctx, queryHistory, argsHistory...)
-	if err != nil {
+	if _, err = conn.Exec(ctx, queryHistory, argsHistory...); err != nil {
 		return fmt.Errorf("failed to insert trip status history: %w", err)
 	}
 
 	return nil
 }
-
 
 type Trip struct {
 	ID             uuid.UUID
@@ -105,11 +115,14 @@ type Trip struct {
 	Price          int64
 	Status         string
 	StartedAt      time.Time
-	FinishedAt     *time.Time 
+	FinishedAt     *time.Time
 }
 
 func (r *TripRepository) GetTrip(ctx context.Context, tripID uuid.UUID) (*Trip, error) {
-	db := getDB(ctx, r.pool)
+	ctx, cancel := db.WithQueryTimeout(ctx)
+	defer cancel()
+
+	conn := getDB(ctx, r.pool)
 	builder := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
 
 	query, args, err := builder.
@@ -122,22 +135,20 @@ func (r *TripRepository) GetTrip(ctx context.Context, tripID uuid.UUID) (*Trip, 
 		From("trips").
 		Where(squirrel.Eq{"id": tripID}).
 		ToSql()
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to build get trip query: %w", err)
 	}
 
 	var t Trip
-	err = db.QueryRow(ctx, query, args...).Scan(
+	err = conn.QueryRow(ctx, query, args...).Scan(
 		&t.ID, &t.UserID, &t.DriverID,
 		&t.StartLatitude, &t.StartLongitude,
 		&t.EndLatitude, &t.EndLongitude,
 		&t.Price, &t.Status, &t.StartedAt, &t.FinishedAt,
 	)
-
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("trip not found: %w", err)
+			return nil, ErrTripNotFound
 		}
 		return nil, fmt.Errorf("failed to get trip: %w", err)
 	}
@@ -145,8 +156,11 @@ func (r *TripRepository) GetTrip(ctx context.Context, tripID uuid.UUID) (*Trip, 
 	return &t, nil
 }
 
-func (r *TripRepository) FinishTrip(ctx context.Context, tripID uuid.UUID) error {
-	db := getDB(ctx, r.pool)
+func (r *TripRepository) FinishTrip(ctx context.Context, tripID uuid.UUID) (*Trip, error) {
+	ctx, cancel := db.WithQueryTimeout(ctx)
+	defer cancel()
+
+	conn := getDB(ctx, r.pool)
 	builder := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
 	now := time.Now()
 
@@ -157,18 +171,37 @@ func (r *TripRepository) FinishTrip(ctx context.Context, tripID uuid.UUID) error
 		Set("updated_at", now).
 		Where(squirrel.Eq{"id": tripID, "status": "active"}).
 		ToSql()
-
 	if err != nil {
-		return fmt.Errorf("failed to build finish trip query: %w", err)
+		return nil, fmt.Errorf("failed to build finish trip query: %w", err)
 	}
 
-	tag, err := db.Exec(ctx, queryUpdate, argsUpdate...)
+	tag, err := conn.Exec(ctx, queryUpdate, argsUpdate...)
 	if err != nil {
-		return fmt.Errorf("failed to execute finish trip: %w", err)
+		return nil, fmt.Errorf("failed to execute finish trip: %w", err)
 	}
 
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("trip not found or already completed")
+		queryCheck, argsCheck, err := builder.
+			Select("status").
+			From("trips").
+			Where(squirrel.Eq{"id": tripID}).
+			ToSql()
+		if err != nil {
+			return nil, fmt.Errorf("failed to build check query: %w", err)
+		}
+
+		var currentStatus string
+		if err = conn.QueryRow(ctx, queryCheck, argsCheck...).Scan(&currentStatus); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, ErrTripNotFound
+			}
+			return nil, fmt.Errorf("failed to check trip existence: %w", err)
+		}
+
+		if currentStatus == "completed" {
+			return nil, ErrTripCompleted
+		}
+		return nil, fmt.Errorf("trip %s is in unexpected status %q", tripID, currentStatus)
 	}
 
 	queryHistory, argsHistory, err := builder.
@@ -176,15 +209,13 @@ func (r *TripRepository) FinishTrip(ctx context.Context, tripID uuid.UUID) error
 		Columns("trip_id", "from_status", "to_status", "reason", "changed_at").
 		Values(tripID, "active", "completed", "Trip finished", now).
 		ToSql()
-
 	if err != nil {
-		return fmt.Errorf("failed to build finish history query: %w", err)
+		return nil, fmt.Errorf("failed to build finish history query: %w", err)
 	}
 
-	_, err = db.Exec(ctx, queryHistory, argsHistory...)
-	if err != nil {
-		return fmt.Errorf("failed to insert trip status history for finish: %w", err)
+	if _, err = conn.Exec(ctx, queryHistory, argsHistory...); err != nil {
+		return nil, fmt.Errorf("failed to insert trip status history for finish: %w", err)
 	}
 
-	return nil
+	return r.GetTrip(ctx, tripID)
 }
