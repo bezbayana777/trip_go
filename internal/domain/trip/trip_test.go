@@ -15,7 +15,7 @@ func TestTrip_Finish(t *testing.T) {
 			Status: trip.StatusActive,
 		}
 		now := time.Now()
-		
+
 		err := tr.Finish(now)
 
 		assert.NoError(t, err)
@@ -27,7 +27,7 @@ func TestTrip_Finish(t *testing.T) {
 		tr := &trip.Trip{
 			Status: trip.StatusCompleted,
 		}
-		
+
 		err := tr.Finish(time.Now())
 
 		assert.ErrorIs(t, err, trip.ErrTripCompleted)

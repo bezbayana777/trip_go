@@ -4,9 +4,11 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+
+	"github.com/bezbayana777/trip_go/internal/domain/trip"
 )
 
 //go:generate mockgen -source ${GOFILE} -destination mocks_test.go -package ${GOPACKAGE}_test
 type Usecase interface {
-	Execute(ctx context.Context, id uuid.UUID) error
+	Execute(ctx context.Context, id uuid.UUID) (*trip.Trip, error)
 }

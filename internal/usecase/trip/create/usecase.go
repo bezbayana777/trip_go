@@ -6,24 +6,28 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/bezbayana777/trip_go/internal/domain/trip"
-	"github.com/bezbayana777/trip_go/internal/infra/telemetry"
-	"github.com/bezbayana777/trip_go/internal/model"
-	repoTrip "github.com/bezbayana777/trip_go/internal/repository/trip"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/metric"
+
+	"github.com/bezbayana777/trip_go/internal/domain/trip"
+	"github.com/bezbayana777/trip_go/internal/model"
 )
 
 type (
 	Usecase struct {
 		repo      tripRepository
 		txManager txManager
+		logger    *slog.Logger
+		metrics   metric.Int64Counter
 	}
 )
 
-func New(repo tripRepository, txManager txManager) *Usecase {
+func New(repo tripRepository, txManager txManager, logger *slog.Logger, metrics metric.Int64Counter) *Usecase {
 	return &Usecase{
 		repo:      repo,
 		txManager: txManager,
+		logger:    logger,
+		metrics:   metrics,
 	}
 }
 
@@ -47,30 +51,31 @@ func (uc *Usecase) Execute(ctx context.Context, dto model.CreateTripDTO) (*trip.
 		Status:    trip.StatusActive,
 		StartedAt: now,
 	}
-	
-	dbParams := repoTrip.CreateTripParams{
-		ID:             newTrip.ID,
-		UserID:         newTrip.UserID,
-		DriverID:       newTrip.DriverID,
-		StartLatitude:  newTrip.StartPoint.Latitude,
-		StartLongitude: newTrip.StartPoint.Longitude,
-		EndLatitude:    newTrip.EndPoint.Latitude,
-		EndLongitude:   newTrip.EndPoint.Longitude,
-		Price:          newTrip.Price,
-		Status:         string(newTrip.Status),
-		StartedAt:      newTrip.StartedAt,
+
+	dbParams := model.CreateTripParams{
+		ID:         newTrip.ID,
+		UserID:     newTrip.UserID,
+		DriverID:   newTrip.DriverID,
+		StartPoint: model.CoordinatesDTO{Latitude: newTrip.StartPoint.Latitude, Longitude: newTrip.StartPoint.Longitude},
+		EndPoint:   model.CoordinatesDTO{Latitude: newTrip.EndPoint.Latitude, Longitude: newTrip.EndPoint.Longitude},
+		Price:      newTrip.Price,
+		Status:     string(newTrip.Status),
+		StartedAt:  newTrip.StartedAt,
 	}
 
 	err := uc.txManager.Do(ctx, func(ctx context.Context) error {
 		return uc.repo.CreateTrip(ctx, dbParams)
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to create trip: %w", err)
 	}
 
-	telemetry.GlobalMetrics.TripsCreated.Add(ctx, 1)
-	slog.Info("trip created", append(telemetry.LogWithContext(ctx), slog.String("trip_id", tripID.String()))...)
+	if uc.metrics != nil {
+		uc.metrics.Add(ctx, 1)
+	}
+	if uc.logger != nil {
+		uc.logger.InfoContext(ctx, "trip created", slog.String("trip_id", tripID.String()))
+	}
 
 	return &newTrip, nil
 }

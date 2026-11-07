@@ -2,7 +2,6 @@ package get_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -47,7 +46,7 @@ func TestUsecase_Get_NotFound(t *testing.T) {
 	uc := get.New(repoMock)
 
 	tripID := uuid.New()
-	expectedErr := errors.New("trip not found")
+	expectedErr := trip.ErrTripNotFound
 
 	repoMock.EXPECT().
 		GetTrip(gomock.Any(), tripID).
@@ -55,6 +54,6 @@ func TestUsecase_Get_NotFound(t *testing.T) {
 
 	tr, err := uc.Execute(context.Background(), tripID)
 
-	assert.Error(t, err)
+	assert.ErrorIs(t, err, expectedErr)
 	assert.Nil(t, tr)
 }

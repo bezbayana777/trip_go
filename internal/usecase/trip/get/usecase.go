@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bezbayana777/trip_go/internal/domain/trip"
 	"github.com/google/uuid"
+
+	"github.com/bezbayana777/trip_go/internal/domain/trip"
 )
 
 type (
-
 	Usecase struct {
 		repo tripRepository
 	}

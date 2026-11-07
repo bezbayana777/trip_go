@@ -45,7 +45,6 @@ func (tm *TxManager) Do(ctx context.Context, fn func(ctx context.Context) error)
 	return nil
 }
 
-
 func TxFromContext(ctx context.Context) (pgx.Tx, bool) {
 	tx, ok := ctx.Value(txKey{}).(pgx.Tx)
 	return tx, ok

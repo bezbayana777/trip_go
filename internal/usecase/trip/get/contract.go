@@ -3,8 +3,10 @@ package get
 
 import (
 	"context"
-	"github.com/bezbayana777/trip_go/internal/domain/trip"
+
 	"github.com/google/uuid"
+
+	"github.com/bezbayana777/trip_go/internal/domain/trip"
 )
 
 type tripRepository interface {

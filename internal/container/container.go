@@ -14,10 +14,10 @@ import (
 )
 
 type Container struct {
-	DBPool         *pgxpool.Pool
-	CreateUsecase  *create.Usecase
-	GetUsecase     *get.Usecase
-	FinishUsecase  *finish.Usecase
+	DBPool        *pgxpool.Pool
+	CreateUsecase *create.Usecase
+	GetUsecase    *get.Usecase
+	FinishUsecase *finish.Usecase
 }
 
 func New(ctx context.Context, databaseURL string) (*Container, error) {
@@ -34,9 +34,9 @@ func New(ctx context.Context, databaseURL string) (*Container, error) {
 	txManager := postgres.NewTxManager(pool)
 
 	return &Container{
-		DBPool:         pool,
-		CreateUsecase:  create.New(tripRepo, txManager),
-		GetUsecase:     get.New(tripRepo),
-		FinishUsecase:  finish.New(tripRepo, txManager),
+		DBPool:        pool,
+		CreateUsecase: create.New(tripRepo, txManager, nil, nil),
+		GetUsecase:    get.New(tripRepo),
+		FinishUsecase: finish.New(tripRepo, txManager, nil, nil),
 	}, nil
 }

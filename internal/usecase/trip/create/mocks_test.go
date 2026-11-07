@@ -14,7 +14,7 @@ import (
 	reflect "reflect"
 
 	trip "github.com/bezbayana777/trip_go/internal/domain/trip"
-	trip0 "github.com/bezbayana777/trip_go/internal/repository/trip"
+	model "github.com/bezbayana777/trip_go/internal/model"
 	uuid "github.com/google/uuid"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -43,7 +43,7 @@ func (m *MocktripRepository) EXPECT() *MocktripRepositoryMockRecorder {
 }
 
 // CreateTrip mocks base method.
-func (m *MocktripRepository) CreateTrip(ctx context.Context, params trip0.CreateTripParams) error {
+func (m *MocktripRepository) CreateTrip(ctx context.Context, params model.CreateTripParams) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateTrip", ctx, params)
 	ret0, _ := ret[0].(error)

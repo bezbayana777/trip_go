@@ -20,12 +20,14 @@ run:
 
 .PHONY: lint
 lint:
-	golangci-lint run
+	golangci-lint fmt --config=.golangci.yml
+	golangci-lint run --config=.golangci.yml
 
 .PHONY: test test-integration
 
 test:
-	CGO_ENABLED=1 go test -race -cover ./...
+	CGO_ENABLED=1 go test -race -coverprofile coverage.out -coverpkg "./internal/domain/...,./internal/usecase/..." ./...
+	go tool cover -func coverage.out | awk '/^total:/ { found=1; print; gsub("%", "", $$3); if ($$3 + 0 < 50) exit 1 } END { if (!found) exit 1 }'
 
 test-integration:
 	CGO_ENABLED=1 go test -v -tags=integration ./...

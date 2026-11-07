@@ -5,14 +5,15 @@ package create
 import (
 	"context"
 
-	"github.com/bezbayana777/trip_go/internal/domain/trip"
-	repoTrip "github.com/bezbayana777/trip_go/internal/repository/trip"
 	"github.com/google/uuid"
+
+	"github.com/bezbayana777/trip_go/internal/domain/trip"
+	"github.com/bezbayana777/trip_go/internal/model"
 )
 
 type (
 	tripRepository interface {
-		CreateTrip(ctx context.Context, params repoTrip.CreateTripParams) error
+		CreateTrip(ctx context.Context, params model.CreateTripParams) error
 		GetActiveDriverTrip(ctx context.Context, driverID uuid.UUID) (*trip.Trip, error)
 	}
 

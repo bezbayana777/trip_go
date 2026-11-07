@@ -1,6 +1,10 @@
 package model
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 type CoordinatesDTO struct {
 	Latitude  float64 `json:"latitude"`
@@ -13,4 +17,15 @@ type CreateTripDTO struct {
 	StartPoint CoordinatesDTO `json:"start_point"`
 	EndPoint   CoordinatesDTO `json:"end_point"`
 	Price      int64          `json:"price"`
+}
+
+type CreateTripParams struct {
+	ID         uuid.UUID
+	UserID     uuid.UUID
+	DriverID   uuid.UUID
+	StartPoint CoordinatesDTO
+	EndPoint   CoordinatesDTO
+	Price      int64
+	Status     string
+	StartedAt  time.Time
 }
