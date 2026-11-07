@@ -32,7 +32,7 @@ func NewPool(ctx context.Context) (*pgxpool.Pool, error) {
 
 	if maxConns := os.Getenv("DATABASE_MAX_CONNS"); maxConns != "" {
 		v, err := strconv.Atoi(maxConns)
-		if err != nil || v <= 0 {
+		if err != nil || v <= 0 || int64(v) > int64(^uint32(0)>>1) {
 			return nil, fmt.Errorf("invalid DATABASE_MAX_CONNS %q: must be a positive integer", maxConns)
 		}
 		config.MaxConns = int32(v)
@@ -40,7 +40,7 @@ func NewPool(ctx context.Context) (*pgxpool.Pool, error) {
 
 	if minConns := os.Getenv("DATABASE_MIN_CONNS"); minConns != "" {
 		v, err := strconv.Atoi(minConns)
-		if err != nil || v < 0 {
+		if err != nil || v < 0 || int64(v) > int64(^uint32(0)>>1) {
 			return nil, fmt.Errorf("invalid DATABASE_MIN_CONNS %q: must be a non-negative integer", minConns)
 		}
 		config.MinConns = int32(v)
@@ -49,19 +49,19 @@ func NewPool(ctx context.Context) (*pgxpool.Pool, error) {
 	if config.MinConns > config.MaxConns {
 		return nil, fmt.Errorf("DATABASE_MIN_CONNS (%d) must not exceed DATABASE_MAX_CONNS (%d)", config.MinConns, config.MaxConns)
 	}
-	
+
 	if maxLifetime := os.Getenv("DATABASE_MAX_CONN_LIFETIME"); maxLifetime != "" {
 		d, err := time.ParseDuration(maxLifetime)
-		if err != nil {
-			return nil, fmt.Errorf("invalid DATABASE_MAX_CONN_LIFETIME %q: %w", maxLifetime, err)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("invalid DATABASE_MAX_CONN_LIFETIME %q: must be a positive duration", maxLifetime)
 		}
 		config.MaxConnLifetime = d
 	}
 
 	if connectTimeout := os.Getenv("DATABASE_CONNECT_TIMEOUT"); connectTimeout != "" {
 		d, err := time.ParseDuration(connectTimeout)
-		if err != nil {
-			return nil, fmt.Errorf("invalid DATABASE_CONNECT_TIMEOUT %q: %w", connectTimeout, err)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("invalid DATABASE_CONNECT_TIMEOUT %q: must be a positive duration", connectTimeout)
 		}
 		config.ConnConfig.ConnectTimeout = d
 	}

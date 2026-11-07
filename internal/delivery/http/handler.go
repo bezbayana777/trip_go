@@ -44,10 +44,11 @@ func toGeneratedTrip(t *repository.Trip) generated.Trip {
 			Latitude:  t.EndLatitude,
 			Longitude: t.EndLongitude,
 		},
-		Price:      t.Price,
-		Status:     generated.TripStatus(t.Status),
-		StartedAt:  t.StartedAt,
-		FinishedAt: t.FinishedAt,
+		Price:          t.Price,
+		Status:         generated.TripStatus(t.Status),
+		StartedAt:      t.StartedAt,
+		FinishedAt:     t.FinishedAt,
+		LastPositionAt: nil,
 	}
 }
 
@@ -153,6 +154,10 @@ func (s *Server) CreateTrip(w http.ResponseWriter, r *http.Request, params gener
 
 	if err := validateRequiredFields(body); err != nil {
 		writeProblem(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if req.UserId.String() == "" || req.DriverId.String() == "" {
+		writeProblem(w, r, http.StatusBadRequest, "invalid_request", "user_id and driver_id are required UUIDs")
 		return
 	}
 
