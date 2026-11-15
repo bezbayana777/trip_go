@@ -50,8 +50,5 @@ make test-integration
 
 `make test` запускает тесты с `-race` и печатает суммарное покрытие домена и usecase, завершаясь ошибкой при результате ниже 50%. `make test-integration` запускает интеграционные тесты с build-тегом `integration`; для них требуется PostgreSQL из окружения и `DATABASE_URL`.
 
-`make lint` явно использует `.golangci.yml`.
-
-
 ![Трейс запроса в Jaeger](./jaeger.png)
 ![Список метрик в Grafana](./metrics.png)
