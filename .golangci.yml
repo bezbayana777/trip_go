@@ -1,0 +1,29 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        no_direct_global_logging:
+          files:
+            - "$all"
+          deny:
+            - pkg: "log$"
+              desc: "Use structured slog logging instead"
+
+formatters:
+  enable:
+    - gofumpt
+    - gci
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/bezbayana777/trip_go)
