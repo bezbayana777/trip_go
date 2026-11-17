@@ -18,6 +18,9 @@ func Problem(err error) (int, generated.Problem) {
 	if errors.As(err, &validation) {
 		return http.StatusBadRequest, generated.Problem{Type: "https://tripgo.example/problems/invalid-request", Title: "Invalid request", Status: http.StatusBadRequest, Code: "invalid_request", Detail: stringPointer("invalid field: " + validation.Field)}
 	}
+	if errors.Is(err, trip.ErrInvalidPosition) {
+		return http.StatusBadRequest, generated.Problem{Type: "https://tripgo.example/problems/invalid-position", Title: "Invalid position", Status: http.StatusBadRequest, Code: "invalid_request", Detail: stringPointer("position is invalid")}
+	}
 	// 1. Ошибки водителя / конфликты (409)
 	if errors.Is(err, trip.ErrDriverBusy) {
 		return http.StatusConflict, generated.Problem{

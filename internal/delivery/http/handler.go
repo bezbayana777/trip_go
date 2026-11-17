@@ -7,16 +7,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/bezbayana777/trip_go/internal/repository"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	domainposition "github.com/bezbayana777/trip_go/internal/domain/position"
 	generated "github.com/bezbayana777/trip_go/internal/generated"
+	"github.com/bezbayana777/trip_go/internal/http/domainerror"
+	"github.com/bezbayana777/trip_go/internal/infra/telemetry"
+	"github.com/bezbayana777/trip_go/internal/repository"
+	positionUsecase "github.com/bezbayana777/trip_go/internal/usecase/position"
 )
 
 const maxBodyBytes = 1 << 20
@@ -25,11 +29,14 @@ type Server struct {
 	repo      *repository.TripRepository
 	txManager repository.TxManager
 	dbPool    *pgxpool.Pool
+	positions *positionUsecase.Usecase
 }
 
 func NewServer(repo *repository.TripRepository, txManager repository.TxManager, dbPool *pgxpool.Pool) *Server {
 	return &Server{repo: repo, txManager: txManager, dbPool: dbPool}
 }
+
+func (s *Server) SetPositionUsecase(usecase *positionUsecase.Usecase) { s.positions = usecase }
 
 func toGeneratedTrip(t *repository.Trip) generated.Trip {
 	return generated.Trip{
@@ -48,7 +55,7 @@ func toGeneratedTrip(t *repository.Trip) generated.Trip {
 		Status:         generated.TripStatus(t.Status),
 		StartedAt:      t.StartedAt,
 		FinishedAt:     t.FinishedAt,
-		LastPositionAt: nil,
+		LastPositionAt: t.LastPositionAt,
 	}
 }
 
@@ -90,7 +97,7 @@ func writeProblem(w http.ResponseWriter, r *http.Request, status int, code, deta
 }
 
 func internalError(w http.ResponseWriter, r *http.Request, err error) {
-	log.Printf("internal error: %s %s: %v", r.Method, r.URL.Path, err)
+	slog.ErrorContext(r.Context(), "request failed", slog.String("method", r.Method), slog.String("path", r.URL.Path), slog.String("error", err.Error()))
 	writeProblem(w, r, http.StatusInternalServerError, "internal_error", "Internal server error")
 }
 
@@ -260,11 +267,85 @@ func (s *Server) FinishTrip(w http.ResponseWriter, r *http.Request, tripId gener
 }
 
 func (s *Server) ListTripPositions(w http.ResponseWriter, r *http.Request, tripId generated.TripId) {
-	w.WriteHeader(http.StatusNotImplemented)
+	if s.positions == nil {
+		internalError(w, r, fmt.Errorf("position usecase is not configured"))
+		return
+	}
+	positions, err := s.positions.List(r.Context(), tripId)
+	if err != nil {
+		s.positionError(w, r, err)
+		return
+	}
+	result := generated.TripPositionsResponse{Positions: make([]generated.TripPosition, 0, len(positions))}
+	for _, p := range positions {
+		result.Positions = append(result.Positions, generated.TripPosition{Id: p.ID, TripId: p.TripID, Coordinates: generated.Coordinates{Latitude: p.Coordinates.Latitude, Longitude: p.Coordinates.Longitude}, RecordedAt: p.RecordedAt})
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) CreateTripPosition(w http.ResponseWriter, r *http.Request, tripId generated.TripId) {
-	w.WriteHeader(http.StatusNotImplemented)
+	if s.positions == nil {
+		internalError(w, r, fmt.Errorf("position usecase is not configured"))
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "invalid_request", "Invalid request body")
+		return
+	}
+	var required map[string]json.RawMessage
+	if err := json.Unmarshal(body, &required); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "invalid_request", "Invalid JSON body")
+		return
+	}
+	if err := requireNonNull(required, "", "coordinates", "recorded_at"); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	var rawCoordinates map[string]json.RawMessage
+	if err := json.Unmarshal(required["coordinates"], &rawCoordinates); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "invalid_request", "coordinates must be an object")
+		return
+	}
+	if err := requireNonNull(rawCoordinates, "coordinates.", "latitude", "longitude"); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	var req generated.CreateTripPositionJSONRequestBody
+	if err := decoder.Decode(&req); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "invalid_request", "Invalid position request")
+		return
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		writeProblem(w, r, http.StatusBadRequest, "invalid_request", "Request must contain one JSON object")
+		return
+	}
+	p := domainposition.Position{Coordinates: domainposition.Coordinates{Latitude: req.Coordinates.Latitude, Longitude: req.Coordinates.Longitude}, RecordedAt: req.RecordedAt}
+	saved, err := s.positions.Save(r.Context(), tripId, p)
+	if err != nil {
+		s.positionError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, generated.TripPosition{Id: saved.ID, TripId: saved.TripID, Coordinates: req.Coordinates, RecordedAt: saved.RecordedAt})
+	if telemetry.GlobalMetrics.PositionsSaved != nil {
+		telemetry.GlobalMetrics.PositionsSaved.Add(r.Context(), 1)
+	}
+}
+
+func (s *Server) positionError(w http.ResponseWriter, r *http.Request, err error) {
+	status, problem := domainerror.Problem(err)
+	if status >= http.StatusInternalServerError {
+		internalError(w, r, err)
+		return
+	}
+	instance := r.URL.Path
+	problem.Instance = &instance
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(problem)
 }
 
 func (s *Server) Health(w http.ResponseWriter, r *http.Request) {

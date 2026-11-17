@@ -27,21 +27,37 @@ import (
 )
 
 type Metrics struct {
-	HttpDuration   metric.Float64Histogram
-	HttpActiveReq  metric.Int64UpDownCounter
-	DbDuration     metric.Float64Histogram
-	TripsCreated   metric.Int64Counter
-	TripsCompleted metric.Int64Counter
+	HttpDuration            metric.Float64Histogram
+	HttpActiveReq           metric.Int64UpDownCounter
+	DbDuration              metric.Float64Histogram
+	TripsCreated            metric.Int64Counter
+	TripsCompleted          metric.Int64Counter
+	StaleChecks             metric.Int64Counter
+	PositionQueueSize       metric.Int64ObservableGauge
+	PositionWorkersActive   metric.Int64ObservableGauge
+	PositionRequests        metric.Int64Counter
+	PositionRequestDuration metric.Float64Histogram
+	PositionsSaved          metric.Int64Counter
 }
 
 var GlobalMetrics Metrics
 
 var (
-	activeTripsProvider func(ctx context.Context) (int64, error)
-	activeTripsMu       sync.RWMutex
+	activeTripsProvider       func(ctx context.Context) (int64, error)
+	activeTripsMu             sync.RWMutex
+	positionQueueSizeProvider func() int64
+	positionWorkersProvider   func() int64
+	positionMetricsMu         sync.RWMutex
 )
 
-func SetActiveTripsProvider(provider func(ctx context.Context) (int64, error)) {
+func SetPositionPoolProviders(queueSize, workers func() int64) {
+	positionMetricsMu.Lock()
+	positionQueueSizeProvider = queueSize
+	positionWorkersProvider = workers
+	positionMetricsMu.Unlock()
+}
+
+func SetActiveTripsProvider(provider func(context.Context) (int64, error)) {
 	activeTripsMu.Lock()
 	defer activeTripsMu.Unlock()
 	activeTripsProvider = provider
@@ -101,6 +117,38 @@ func Init(ctx context.Context, collectorURL string) (func(context.Context) error
 	}
 	if GlobalMetrics.TripsCompleted, err = meter.Int64Counter("tripgo.trips.completed", metric.WithUnit("{trip}")); err != nil {
 		return nil, fmt.Errorf("failed to create tripgo.trips.completed: %w", err)
+	}
+	if GlobalMetrics.StaleChecks, err = meter.Int64Counter("tripgo.stale_checks"); err != nil {
+		return nil, fmt.Errorf("create tripgo.stale_checks: %w", err)
+	}
+	if GlobalMetrics.PositionQueueSize, err = meter.Int64ObservableGauge("tripgo.position_requests.queue.size"); err != nil {
+		return nil, fmt.Errorf("create queue size gauge: %w", err)
+	}
+	if GlobalMetrics.PositionWorkersActive, err = meter.Int64ObservableGauge("tripgo.position_requests.workers.active"); err != nil {
+		return nil, fmt.Errorf("create workers gauge: %w", err)
+	}
+	if GlobalMetrics.PositionRequests, err = meter.Int64Counter("tripgo.position_requests"); err != nil {
+		return nil, fmt.Errorf("create tripgo.position_requests: %w", err)
+	}
+	if GlobalMetrics.PositionRequestDuration, err = meter.Float64Histogram("tripgo.position_requests.duration", metric.WithUnit("s")); err != nil {
+		return nil, fmt.Errorf("create request duration: %w", err)
+	}
+	if GlobalMetrics.PositionsSaved, err = meter.Int64Counter("tripgo.positions.saved"); err != nil {
+		return nil, fmt.Errorf("create tripgo.positions.saved: %w", err)
+	}
+	if _, err = meter.RegisterCallback(func(ctx context.Context, observer metric.Observer) error {
+		positionMetricsMu.RLock()
+		q, w := positionQueueSizeProvider, positionWorkersProvider
+		positionMetricsMu.RUnlock()
+		if q != nil && GlobalMetrics.PositionQueueSize != nil {
+			observer.ObserveInt64(GlobalMetrics.PositionQueueSize, q())
+		}
+		if w != nil && GlobalMetrics.PositionWorkersActive != nil {
+			observer.ObserveInt64(GlobalMetrics.PositionWorkersActive, w())
+		}
+		return nil
+	}, GlobalMetrics.PositionQueueSize, GlobalMetrics.PositionWorkersActive); err != nil {
+		return nil, fmt.Errorf("register position metrics callback: %w", err)
 	}
 
 	if err := registerActiveTripsGauge(meter); err != nil {

@@ -1,0 +1,11 @@
+./bind.go
+./bindform.go
+./bindjson.go
+./bindparam.go
+./bindstring.go
+./bindunion.go
+./deepobject.go
+./encoder.go
+./jsonmerge.go
+./paramformat.go
+./styleparam.go

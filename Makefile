@@ -17,6 +17,10 @@ migrate:
 run:
 	go run cmd/trip-service/main.go
 
+.PHONY: down
+down:
+	go tool goose -dir migrations postgres "$(DATABASE_URL)" down
+
 
 .PHONY: lint
 lint:

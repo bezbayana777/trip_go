@@ -1,0 +1,13 @@
+./aggregate.go
+./atomic.go
+./doc.go
+./drop.go
+./exemplar.go
+./exponential_histogram.go
+./filtered_reservoir.go
+./finish_sum.go
+./histogram.go
+./lastvalue.go
+./lazy_attributes.go
+./limit.go
+./sum.go

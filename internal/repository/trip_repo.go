@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"github.com/Masterminds/squirrel"
-	"github.com/bezbayana777/trip_go/internal/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/bezbayana777/trip_go/internal/db"
 )
 
 var (
@@ -28,6 +29,16 @@ type DBops interface {
 
 type TripRepository struct {
 	pool *pgxpool.Pool
+}
+
+func (r *TripRepository) CountActiveTrips(ctx context.Context) (int64, error) {
+	ctx, cancel := db.WithQueryTimeout(ctx)
+	defer cancel()
+	var count int64
+	if err := r.pool.QueryRow(ctx, "SELECT count(*) FROM trips WHERE status=$1", "active").Scan(&count); err != nil {
+		return 0, fmt.Errorf("count active trips: %w", err)
+	}
+	return count, nil
 }
 
 func NewTripRepository(pool *pgxpool.Pool) *TripRepository {
@@ -116,6 +127,7 @@ type Trip struct {
 	Status         string
 	StartedAt      time.Time
 	FinishedAt     *time.Time
+	LastPositionAt *time.Time
 }
 
 func (r *TripRepository) GetTrip(ctx context.Context, tripID uuid.UUID) (*Trip, error) {

@@ -4,9 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bezbayana777/trip_go/internal/db"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/bezbayana777/trip_go/internal/db"
 )
 
 type contextKey string
