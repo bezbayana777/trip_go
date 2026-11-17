@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -23,6 +24,15 @@ type DB interface {
 type Repository struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
+
+func (r *Repository) SetLastPositionAt(ctx context.Context, id uuid.UUID, at *time.Time) error {
+	_, err := r.getDB(ctx).Exec(ctx, `UPDATE trips SET last_position_at=$2 WHERE id=$1`, id, at)
+	if err != nil {
+		return fmt.Errorf("update trip last position time: %w", err)
+	}
+	return nil
+}
+
 func (r *Repository) getDB(ctx context.Context) DB {
 	if tx, ok := postgres.TxFromContext(ctx); ok {
 		return tx
@@ -47,7 +57,7 @@ func (r *Repository) CreateTrip(ctx context.Context, arg model.CreateTripParams)
 
 func (r *Repository) GetTrip(ctx context.Context, id uuid.UUID) (*domaintrip.Trip, error) {
 	var t domaintrip.Trip
-	err := r.getDB(ctx).QueryRow(ctx, `SELECT id,user_id,driver_id,start_latitude,start_longitude,end_latitude,end_longitude,price,status,started_at,finished_at FROM trips WHERE id=$1`, id).Scan(&t.ID, &t.UserID, &t.DriverID, &t.StartPoint.Latitude, &t.StartPoint.Longitude, &t.EndPoint.Latitude, &t.EndPoint.Longitude, &t.Price, &t.Status, &t.StartedAt, &t.FinishedAt)
+	err := r.getDB(ctx).QueryRow(ctx, `SELECT id,user_id,driver_id,start_latitude,start_longitude,end_latitude,end_longitude,price,status,started_at,finished_at,last_position_at FROM trips WHERE id=$1`, id).Scan(&t.ID, &t.UserID, &t.DriverID, &t.StartPoint.Latitude, &t.StartPoint.Longitude, &t.EndPoint.Latitude, &t.EndPoint.Longitude, &t.Price, &t.Status, &t.StartedAt, &t.FinishedAt, &t.LastPositionAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domaintrip.ErrTripNotFound
 	}
